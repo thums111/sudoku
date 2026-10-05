@@ -113,7 +113,9 @@
   .btn { display:block; width:100%; height:54px; border:none; border-radius:16px; font-size:17px; font-weight:700; margin-top:8px; }
   .btn.primary { background:var(--accent); color:#fff; }
   .btn.ghost { background:var(--card2); }
-  .levels { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .levels { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+  .levels .btn.expert { background:linear-gradient(135deg,#ff6b35,#ff3d6e); color:#fff; }
+  .hint { font-size:13px; color:var(--muted); line-height:1.5; margin:10px 2px 0; }
   .levels .btn { margin:0; }
   .stats { width:100%; border-collapse:collapse; font-size:15px; }
   .stats th, .stats td { padding:10px 6px; text-align:center; border-bottom:1px solid var(--line); }
@@ -169,7 +171,11 @@
     <button class="btn ghost" data-level="easy">Lehká</button>
     <button class="btn ghost" data-level="medium">Střední</button>
     <button class="btn ghost" data-level="hard">Těžká</button>
+    <button class="btn ghost expert" data-level="expert">🔥 Expert</button>
   </div>
+  <p class="hint">Těžká a Expert se nehodnotí podle počtu čísel, ale podle toho, jaké techniky jsou potřeba.
+    Těžká vyžaduje dvojice/trojice a „locked candidates“, Expert navíc X-Wing, Swordfish nebo XY-Wing.
+    Obě se vždy dají vyřešit logicky, bez hádání.</p>
   <h4>Statistiky</h4>
   <table class="stats" id="statsTable"></table>
   <button class="btn primary" data-close>Pokračovat ve hře</button>
@@ -301,7 +307,8 @@ function randomSolution() {
 const LEVELS = {
   easy:   { name: 'Lehká',   givens: 38 },   // givens = kolik čísel zůstane vyplněných
   medium: { name: 'Střední', givens: 31 },
-  hard:   { name: 'Těžká',   givens: 25 }
+  hard:   { name: 'Těžká',   tech: 2 },      // tech = jakou úroveň technik MUSÍ zadání vyžadovat (viz 3b)
+  expert: { name: 'Expert',  tech: 3 }
 };
 
 function generate(level) {
@@ -316,6 +323,208 @@ function generate(level) {
     else givens--;
   }
   return { puzzle, solution };
+}
+
+// =========================================================
+// 3b) "LIDSKÝ" ŘEŠITEL – měří, jak těžké sudoku doopravdy je
+// =========================================================
+// Backtracking výše řeší hrubou silou (zkouší). Člověk ale nehádá – používá techniky.
+// Tenhle řešitel postupuje jako člověk: vždy zkusí nejjednodušší techniku, která něco posune.
+// Podle NEJTĚŽŠÍ techniky, kterou musel použít, poznáme skutečnou obtížnost zadání.
+//
+//   úroveň 1: Naked single, Hidden single           (stačí "kam co patří")
+//   úroveň 2: Locked candidates, dvojice, trojice   (práce s poznámkami)
+//   úroveň 3: X-Wing, Swordfish, XY-Wing           (expertní vzory)
+
+// 27 "jednotek": 9 řádků, 9 sloupců, 9 čtverců – každá je seznam 9 políček
+const UNITS = [];
+for (let r = 0; r < 9; r++) UNITS.push([...Array(9).keys()].map(c => r * 9 + c));
+for (let c = 0; c < 9; c++) UNITS.push([...Array(9).keys()].map(r => r * 9 + c));
+for (let b = 0; b < 9; b++) {
+  const r0 = Math.floor(b / 3) * 3, c0 = (b % 3) * 3, u = [];
+  for (let k = 0; k < 9; k++) u.push((r0 + Math.floor(k / 3)) * 9 + c0 + k % 3);
+  UNITS.push(u);
+}
+const ROW_UNITS = UNITS.slice(0, 9), COL_UNITS = UNITS.slice(9, 18), BOX_UNITS = UNITS.slice(18);
+const sees = (a, b) => a !== b && (rowOf(a) === rowOf(b) || colOf(a) === colOf(b) || boxOf(a) === boxOf(b));
+
+// všechny k-tice z pole (pro dvojice, trojice, Swordfish…)
+function combos(arr, k, start = 0, pick = [], out = []) {
+  if (pick.length === k) { out.push(pick.slice()); return out; }
+  for (let i = start; i < arr.length; i++) { pick.push(arr[i]); combos(arr, k, i + 1, pick, out); pick.pop(); }
+  return out;
+}
+
+function gradePuzzle(puzzle) {
+  const g = puzzle.slice();
+  const cand = Array(81).fill(0);           // poznámky každého políčka (bitová maska)
+  for (let i = 0; i < 81; i++) if (!g[i]) {
+    let m = ALL;
+    for (const p of PEERS[i]) if (g[p]) m &= ~(1 << g[p]);
+    cand[i] = m;
+  }
+  const place = (i, d) => { g[i] = d; cand[i] = 0; for (const p of PEERS[i]) cand[p] &= ~(1 << d); };
+  // smaže číslo d z poznámek políček; vrátí true, pokud se něco opravdu smazalo
+  const eliminate = (cells, d) => { let ch = false; for (const i of cells) if (cand[i] & (1 << d)) { cand[i] &= ~(1 << d); ch = true; } return ch; };
+
+  // ---- úroveň 1 ----
+  function nakedSingle() {          // políčko má jedinou možnost
+    for (let i = 0; i < 81; i++) if (!g[i] && popcount(cand[i]) === 1) { place(i, Math.log2(cand[i])); return true; }
+    return false;
+  }
+  function hiddenSingle() {         // číslo může v řádku/sloupci/čtverci jen na jedno místo
+    for (const u of UNITS) for (let d = 1; d <= 9; d++) {
+      let spot = -1, n = 0;
+      for (const i of u) if (cand[i] & (1 << d)) { spot = i; n++; }
+      if (n === 1) { place(spot, d); return true; }
+    }
+    return false;
+  }
+  // ---- úroveň 2 ----
+  function lockedCandidates() {
+    for (let d = 1; d <= 9; d++) {
+      // "pointing": ve čtverci je d jen v jednom řádku/sloupci → jinde v tom řádku/sloupci být nemůže
+      for (const box of BOX_UNITS) {
+        const cs = box.filter(i => cand[i] & (1 << d));
+        if (cs.length < 2) continue;
+        for (const lines of [ROW_UNITS, COL_UNITS]) {
+          const line = lines.find(l => cs.every(i => l.includes(i)));
+          if (line && eliminate(line.filter(i => !box.includes(i)), d)) return true;
+        }
+      }
+      // "claiming": v řádku/sloupci je d jen v jednom čtverci → jinde v tom čtverci být nemůže
+      for (const line of [...ROW_UNITS, ...COL_UNITS]) {
+        const cs = line.filter(i => cand[i] & (1 << d));
+        if (cs.length < 2) continue;
+        const box = BOX_UNITS.find(b => cs.every(i => b.includes(i)));
+        if (box && eliminate(box.filter(i => !line.includes(i)), d)) return true;
+      }
+    }
+    return false;
+  }
+  function nakedSubset() {          // k políček má dohromady jen k možností → ty jinde v jednotce nebudou
+    for (const k of [2, 3]) for (const u of UNITS) {
+      const open = u.filter(i => !g[i] && popcount(cand[i]) <= k);
+      for (const set of combos(open, k)) {
+        const mask = set.reduce((m, i) => m | cand[i], 0);
+        if (popcount(mask) !== k) continue;
+        let ch = false;
+        for (const i of u) if (!g[i] && !set.includes(i) && (cand[i] & mask)) { cand[i] &= ~mask; ch = true; }
+        if (ch) return true;
+      }
+    }
+    return false;
+  }
+  function hiddenSubset() {         // k čísel se v jednotce vejde jen do k políček → ostatní poznámky tam pryč
+    for (const k of [2, 3]) for (const u of UNITS) {
+      const digits = [];
+      for (let d = 1; d <= 9; d++) { const n = u.filter(i => cand[i] & (1 << d)).length; if (n >= 2 && n <= k) digits.push(d); }
+      for (const ds of combos(digits, k)) {
+        const mask = ds.reduce((m, d) => m | (1 << d), 0);
+        const cells = u.filter(i => cand[i] & mask);
+        if (cells.length !== k) continue;
+        let ch = false;
+        for (const i of cells) if (cand[i] & ~mask) { cand[i] &= mask; ch = true; }
+        if (ch) return true;
+      }
+    }
+    return false;
+  }
+  // ---- úroveň 3 ----
+  function fish(size) {             // X-Wing (2), Swordfish (3)
+    for (let d = 1; d <= 9; d++) for (const [base, cover] of [[ROW_UNITS, COL_UNITS], [COL_UNITS, ROW_UNITS]]) {
+      // pro každý řádek: ve kterých sloupcích může být d (a naopak)
+      const lines = [];
+      base.forEach((u, bi) => {
+        const pos = []; u.forEach((i, k) => { if (cand[i] & (1 << d)) pos.push(k); });
+        if (pos.length >= 2 && pos.length <= size) lines.push({ bi, pos });
+      });
+      for (const set of combos(lines, size)) {
+        const coverIdx = [...new Set(set.flatMap(l => l.pos))];
+        if (coverIdx.length !== size) continue;
+        const baseIdx = set.map(l => l.bi);
+        let ch = false;
+        for (const ci of coverIdx) cover[ci].forEach((i, k) => {
+          if (!baseIdx.includes(k) && (cand[i] & (1 << d))) { cand[i] &= ~(1 << d); ch = true; }
+        });
+        if (ch) return true;
+      }
+    }
+    return false;
+  }
+  const xWing = () => fish(2), swordfish = () => fish(3);
+  function xyWing() {               // pivot {a,b}, křídla {a,c} a {b,c} → c pryč z políček, která vidí obě křídla
+    const bivalue = [];
+    for (let i = 0; i < 81; i++) if (!g[i] && popcount(cand[i]) === 2) bivalue.push(i);
+    for (const piv of bivalue) {
+      const wings = bivalue.filter(w => sees(piv, w) && popcount(cand[w] & cand[piv]) === 1);
+      for (const [w1, w2] of combos(wings, 2)) {
+        const c = cand[w1] & cand[w2] & ~cand[piv];
+        if (popcount(c) !== 1 || (cand[w1] | cand[w2] | cand[piv]) !== (cand[piv] | c)) continue;
+        if ((cand[w1] & cand[piv]) === (cand[w2] & cand[piv])) continue;
+        const d = Math.log2(c);
+        const targets = [];
+        for (let i = 0; i < 81; i++) if (i !== w1 && i !== w2 && sees(i, w1) && sees(i, w2)) targets.push(i);
+        if (eliminate(targets, d)) return true;
+      }
+    }
+    return false;
+  }
+
+  const TECHNIQUES = [
+    [1, nakedSingle], [1, hiddenSingle],
+    [2, lockedCandidates], [2, nakedSubset], [2, hiddenSubset],
+    [3, xWing], [3, xyWing], [3, swordfish]
+  ];
+  let level = 0, hardSteps = 0;
+  for (;;) {
+    if (g.every(Boolean)) return { solved: true, level, hardSteps };
+    if (g.some((v, i) => !v && !cand[i])) return { solved: false, level, hardSteps };   // spor
+    let progress = false;
+    for (const [lvl, tech] of TECHNIQUES) {
+      if (tech()) {
+        level = Math.max(level, lvl);
+        if (lvl === 3) hardSteps++;
+        progress = true;
+        break;      // po každém kroku zase od nejjednodušší techniky
+      }
+    }
+    if (!progress) return { solved: false, level, hardSteps };   // člověk by musel hádat
+  }
+}
+
+// Minimální zadání: maže čísla, dokud jde – nezůstane ani jedno navíc.
+function generateMinimal() {
+  const solution = randomSolution();
+  const puzzle = solution.slice();
+  for (const i of shuffle([...Array(81).keys()])) {
+    const keep = puzzle[i];
+    puzzle[i] = 0;
+    if (countSolutions(puzzle, 2) !== 1) puzzle[i] = keep;
+  }
+  return { puzzle, solution };
+}
+
+// Hledá zadání, které vyžaduje přesně danou úroveň technik a dá se vyřešit bez hádání.
+// Zkouší po dávkách a mezi nimi pouští prohlížeč "nadechnout", aby aplikace nezamrzla.
+function findGraded(tech) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    let fallback = null;
+    (function batch() {
+      const until = Date.now() + 60;
+      while (Date.now() < until) {
+        const p = generateMinimal();
+        const r = gradePuzzle(p.puzzle);
+        if (!r.solved || r.level !== tech) continue;
+        // u Expertu chceme ideálně víc než jeden expertní krok; po 1,5 s bereme i jeden
+        if (tech < 3 || r.hardSteps >= 2) return resolve(p);
+        if (!fallback) fallback = p;
+      }
+      if (fallback && Date.now() - start > 1500) return resolve(fallback);
+      setTimeout(batch, 0);
+    })();
+  });
 }
 
 // =========================================================
@@ -342,19 +551,24 @@ let selected = -1;      // vybrané políčko
 let noteMode = false;   // režim poznámek
 let history = [];       // pro tlačítko Zpět
 
-function newGame(level) {
-  toast('Připravuji nové sudoku…');
+let generating = false;   // během hledání nového zadání nejde hrát
+const blocked = () => !game || game.won || generating;
+
+async function newGame(level) {
+  if (generating) return;
+  generating = true;
   closeSheets();
-  // malá pauza, aby se stihlo ukázat oznámení, než se začne počítat
-  setTimeout(() => {
-    const { puzzle, solution } = generate(level);
-    game = { level, puzzle, solution, board: puzzle.slice(), notes: Array(81).fill(0),
-             mistakes: 0, hints: 0, seconds: 0, won: false };
-    history = []; selected = -1; noteMode = false;
-    stats[level].played++; saveStats();
-    $('board').classList.remove('won');
-    saveGame(); render();
-  }, 40);
+  toast(level === 'expert' ? 'Hledám expertní sudoku… 🔥' : 'Připravuji nové sudoku…', true);
+  await new Promise(r => setTimeout(r, 40));   // ať se oznámení stihne ukázat
+  const { puzzle, solution } = LEVELS[level].tech ? await findGraded(LEVELS[level].tech) : generate(level);
+  game = { level, puzzle, solution, board: puzzle.slice(), notes: Array(81).fill(0),
+           mistakes: 0, hints: 0, seconds: 0, won: false };
+  history = []; selected = -1; noteMode = false;
+  stats[level].played++; saveStats();
+  $('board').classList.remove('won');
+  generating = false;
+  hideToast();
+  saveGame(); render();
 }
 
 // =========================================================
@@ -366,7 +580,7 @@ function snapshot() {
 }
 
 function inputDigit(d) {
-  if (!game || game.won || selected < 0 || game.puzzle[selected]) return;
+  if (blocked() || selected < 0 || game.puzzle[selected]) return;
   const i = selected;
   if (noteMode) {
     if (game.board[i]) return;          // poznámky jen do prázdných políček
@@ -389,7 +603,7 @@ function inputDigit(d) {
 }
 
 function erase() {
-  if (!game || game.won || selected < 0 || game.puzzle[selected]) return;
+  if (blocked() || selected < 0 || game.puzzle[selected]) return;
   if (!game.board[selected] && !game.notes[selected]) return;
   snapshot();
   game.board[selected] = 0; game.notes[selected] = 0;
@@ -397,14 +611,14 @@ function erase() {
 }
 
 function undo() {
-  if (!game || game.won || !history.length) return;
+  if (blocked() || !history.length) return;
   const h = history.pop();
   game.board = h.board; game.notes = h.notes; selected = h.selected;
   saveGame(); render();
 }
 
 function hint() {
-  if (!game || game.won) return;
+  if (blocked()) return;
   // nápověda do vybraného políčka; když není vhodné, vybere se náhodné prázdné/špatné
   let i = selected;
   if (i < 0 || game.puzzle[i] || game.board[i] === game.solution[i]) {
@@ -435,7 +649,7 @@ function checkWin() {
     <div><b>${fmtTime(game.seconds)}</b><small>čas</small></div>
     <div><b>${game.mistakes}</b><small>chyb</small></div>
     <div><b>${game.hints}</b><small>nápověd</small></div>`;
-  $('winRecord').textContent = record ? `🏆 Nový rekord – ${LEVELS[game.level].name.toLowerCase()} obtížnost!` : '';
+  $('winRecord').textContent = record ? `🏆 Nový rekord (${LEVELS[game.level].name})!` : '';
   setTimeout(() => openSheet('sheetWin'), 1400);
 }
 
@@ -529,6 +743,7 @@ $('btnNotes').addEventListener('click', () => { noteMode = !noteMode; render(); 
 $('btnMenu').addEventListener('click', () => { renderStats(); openSheet('sheetMenu'); });
 
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
+  if (generating) return;
   const inProgress = game && !game.won && game.board.some((v, i) => v && !game.puzzle[i]);
   if (inProgress && !confirm('Rozehranou hru ztratíš. Začít novou?')) return;
   newGame(b.dataset.level);
@@ -570,16 +785,18 @@ $('overlay').addEventListener('click', () => { if (!$('sheetWin').classList.cont
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, sticky = false) {
   $('toast').textContent = msg; $('toast').classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 1800);
+  clearTimeout(toastTimer);
+  if (!sticky) toastTimer = setTimeout(hideToast, 1800);
 }
+function hideToast() { $('toast').classList.remove('show'); }
 
 // =========================================================
 // 9) ČASOMÍRA – běží jen když hraješ (ne v menu ani na pozadí)
 // =========================================================
 setInterval(() => {
-  if (!game || game.won || document.hidden || sheetOpen()) return;
+  if (blocked() || document.hidden || sheetOpen()) return;
   game.seconds++;
   $('time').textContent = fmtTime(game.seconds);
   if (game.seconds % 5 === 0) saveGame();
