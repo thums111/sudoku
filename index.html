@@ -144,7 +144,7 @@
 
   <div class="info">
     <span id="level">Střední</span>
-    <span>Chyby: <b id="mistakes">0</b></span>
+    <span>Chyby: <b id="mistakes">0/3</b></span>
     <span>⏱ <b id="time">0:00</b></span>
   </div>
 
@@ -189,6 +189,16 @@
   <div class="record" id="winRecord"></div>
   <button class="btn primary" id="btnAgain">Další hra</button>
   <button class="btn ghost" id="btnOtherLevel">Změnit obtížnost</button>
+</div>
+
+<!-- Prohra -->
+<div class="sheet" id="sheetLose">
+  <div class="win-big">💥</div>
+  <h3 style="text-align:center">Konec hry</h3>
+  <p class="hint" id="loseInfo" style="text-align:center;font-size:15px;margin-bottom:8px"></p>
+  <button class="btn primary" id="btnLoseNew">Nová hra</button>
+  <button class="btn ghost" id="btnLoseRetry">Zkusit stejné zadání znovu</button>
+  <button class="btn ghost" id="btnLoseLevel">Změnit obtížnost</button>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -551,8 +561,9 @@ let selected = -1;      // vybrané políčko
 let noteMode = false;   // režim poznámek
 let history = [];       // pro tlačítko Zpět
 
+const MAX_MISTAKES = 3;    // po tolika chybách hra končí
 let generating = false;   // během hledání nového zadání nejde hrát
-const blocked = () => !game || game.won || generating;
+const blocked = () => !game || game.won || game.lost || generating;
 
 async function newGame(level) {
   if (generating) return;
@@ -562,7 +573,7 @@ async function newGame(level) {
   await new Promise(r => setTimeout(r, 40));   // ať se oznámení stihne ukázat
   const { puzzle, solution } = LEVELS[level].tech ? await findGraded(LEVELS[level].tech) : generate(level);
   game = { level, puzzle, solution, board: puzzle.slice(), notes: Array(81).fill(0),
-           mistakes: 0, hints: 0, seconds: 0, won: false };
+           mistakes: 0, hints: 0, seconds: 0, won: false, lost: false };
   history = []; selected = -1; noteMode = false;
   stats[level].played++; saveStats();
   $('board').classList.remove('won');
@@ -593,6 +604,7 @@ function inputDigit(d) {
     game.notes[i] = 0;
     if (d !== game.solution[i]) {
       game.mistakes++;
+      if (game.mistakes >= MAX_MISTAKES) { gameOver(); saveGame(); render(); return; }
       if (navigator.vibrate) navigator.vibrate(90);
     } else {
       for (const p of PEERS[i]) game.notes[p] &= ~(1 << d);   // smaž poznámku d u sousedů
@@ -633,6 +645,23 @@ function hint() {
   for (const p of PEERS[i]) game.notes[p] &= ~(1 << d);
   selected = i;
   checkWin(); saveGame(); render();
+}
+
+function gameOver() {
+  game.lost = true;
+  selected = -1;
+  if (navigator.vibrate) navigator.vibrate([120, 80, 120, 80, 300]);
+  $('loseInfo').textContent = `${MAX_MISTAKES} chyby – tohle sudoku tě dostalo. Čas: ${fmtTime(game.seconds)}`;
+  setTimeout(() => openSheet('sheetLose'), 600);
+}
+
+// stejné zadání znovu od začátku
+function restartSame() {
+  Object.assign(game, { board: game.puzzle.slice(), notes: Array(81).fill(0),
+    mistakes: 0, hints: 0, seconds: 0, won: false, lost: false });
+  history = []; selected = -1; noteMode = false;
+  stats[game.level].played++; saveStats();
+  closeSheets(); saveGame(); render();
 }
 
 function checkWin() {
@@ -720,7 +749,8 @@ function render() {
   $('btnNotes').classList.toggle('on', noteMode);
   $('notesLbl').textContent = noteMode ? 'Poznámky ZAP' : 'Poznámky';
   $('level').textContent = LEVELS[game.level].name;
-  $('mistakes').textContent = game.mistakes;
+  $('mistakes').textContent = `${game.mistakes}/${MAX_MISTAKES}`;
+  $('mistakes').style.color = game.mistakes >= MAX_MISTAKES - 1 ? 'var(--error)' : '';
   $('time').textContent = fmtTime(game.seconds);
 }
 
@@ -744,11 +774,14 @@ $('btnMenu').addEventListener('click', () => { renderStats(); openSheet('sheetMe
 
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
   if (generating) return;
-  const inProgress = game && !game.won && game.board.some((v, i) => v && !game.puzzle[i]);
+  const inProgress = game && !game.won && !game.lost && game.board.some((v, i) => v && !game.puzzle[i]);
   if (inProgress && !confirm('Rozehranou hru ztratíš. Začít novou?')) return;
   newGame(b.dataset.level);
 }));
 $('btnAgain').addEventListener('click', () => newGame(game.level));
+$('btnLoseNew').addEventListener('click', () => newGame(game.level));
+$('btnLoseRetry').addEventListener('click', restartSame);
+$('btnLoseLevel').addEventListener('click', () => { renderStats(); openSheet('sheetMenu'); });
 $('btnOtherLevel').addEventListener('click', () => { renderStats(); openSheet('sheetMenu'); });
 
 // klávesnice (na počítači): čísla, šipky, Backspace, N = poznámky, Ctrl+Z = zpět
@@ -781,7 +814,7 @@ function closeSheets() {
   document.querySelectorAll('.sheet').forEach(s => s.classList.remove('open'));
 }
 const sheetOpen = () => $('overlay').classList.contains('open');
-$('overlay').addEventListener('click', () => { if (!$('sheetWin').classList.contains('open')) closeSheets(); });
+$('overlay').addEventListener('click', () => { if (!$('sheetWin').classList.contains('open') && !$('sheetLose').classList.contains('open')) closeSheets(); });
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
 
 let toastTimer;
@@ -808,7 +841,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && gam
 // =========================================================
 buildBoard();
 const saved = storeGet(SAVE_KEY);
-if (saved && !saved.won && LEVELS[saved.level] && [saved.puzzle, saved.solution, saved.board, saved.notes].every(a => Array.isArray(a) && a.length === 81)) {
+if (saved && !saved.won && !saved.lost && LEVELS[saved.level] && [saved.puzzle, saved.solution, saved.board, saved.notes].every(a => Array.isArray(a) && a.length === 81)) {
   game = saved; render();
 } else {
   newGame(saved && LEVELS[saved.level] ? saved.level : 'medium');

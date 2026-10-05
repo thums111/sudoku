@@ -1,6 +1,6 @@
 // Service worker – uloží hru do mobilu, aby šla hrát i bez internetu.
 // Při nové verzi aplikace zvyš číslo (v1 -> v2), aby si mobil stáhl novinky.
-const CACHE = 'sudoku-v2';
+const CACHE = 'sudoku-v3';
 const FILES = [
   './',
   './index.html',
