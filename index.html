@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0f1115">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Sudoku</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  /* =========================================================
+     BARVY – tmavý režim (výchozí) a světlý podle nastavení mobilu
+     ========================================================= */
+  :root {
+    --bg:#0f1115; --card:#1a1d24; --card2:#262a36;
+    --line:#333949; --line-strong:#9aa3b8;
+    --text:#f2f4f8; --muted:#8b93a7;
+    --accent:#5b8cff; --peer:rgba(91,140,255,.13); --same:rgba(91,140,255,.34);
+    --given:#f2f4f8; --user:#82b1ff; --error:#ff4d6d; --ok:#3ddc97;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#f3f5f9; --card:#ffffff; --card2:#e8ebf2;
+      --line:#d5dae4; --line-strong:#2f3546;
+      --text:#151821; --muted:#6b7385;
+      --accent:#3366ee; --peer:rgba(51,102,238,.08); --same:rgba(51,102,238,.24);
+      --given:#151821; --user:#2a5bd7; --error:#e0244a;
+    }
+  }
+
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html, body { background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Roboto,sans-serif; }
+  body { min-height:100dvh; overscroll-behavior:none; user-select:none; -webkit-user-select:none; }
+  button { font-family:inherit; color:inherit; cursor:pointer; }
+
+  .app { max-width:560px; margin:0 auto; min-height:100dvh; display:flex; flex-direction:column; gap:12px;
+    padding:calc(env(safe-area-inset-top) + 12px) 12px calc(env(safe-area-inset-bottom) + 18px); }
+
+  header { display:flex; align-items:center; justify-content:space-between; }
+  header h1 { font-size:25px; font-weight:800; letter-spacing:-.5px; }
+  header h1 span { color:var(--accent); }
+  .icon-btn { background:var(--card); border:none; width:44px; height:44px; border-radius:14px; font-size:20px; }
+
+  .info { display:flex; justify-content:space-between; align-items:center; font-size:14px; color:var(--muted); padding:0 4px; }
+  .info b { color:var(--text); font-variant-numeric:tabular-nums; }
+
+  /* =========================================================
+     HRACÍ PLOCHA 9×9
+     ========================================================= */
+  .board { display:grid; grid-template-columns:repeat(9,1fr); aspect-ratio:1; width:100%;
+    border:2.5px solid var(--line-strong); border-radius:12px; overflow:hidden; background:var(--card); }
+  .cell { position:relative; display:flex; align-items:center; justify-content:center;
+    border-right:1px solid var(--line); border-bottom:1px solid var(--line);
+    font-size:clamp(20px, 6.6vw, 32px); font-weight:500; color:var(--user);
+    transition:background-color .12s; }
+  .cell.br { border-right:2.5px solid var(--line-strong); }   /* tlustá čára za 3. a 6. sloupcem */
+  .cell.bb { border-bottom:2.5px solid var(--line-strong); }  /* tlustá čára pod 3. a 6. řádkem */
+  .cell.c8 { border-right:none; }
+  .cell.r8 { border-bottom:none; }
+  .cell.given { color:var(--given); font-weight:700; }
+  .cell.peer  { background:var(--peer); }
+  .cell.same  { background:var(--same); }
+  .cell.sel   { background:var(--accent); color:#fff; }
+  .cell.wrong { color:var(--error); }
+  .cell.wrong.sel { background:var(--error); color:#fff; }
+
+  /* poznámky = malá čísla 3×3 uvnitř políčka */
+  .notes { position:absolute; inset:1px; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr); }
+  .notes span { display:flex; align-items:center; justify-content:center;
+    font-size:clamp(9px, 2.5vw, 12px); font-weight:600; color:var(--muted); }
+  .notes span.hl { color:var(--accent); font-weight:800; }
+  .cell.sel .notes span { color:#fff; }
+
+  /* animace po vyřešení */
+  .board.won .cell { animation:pop .45s ease both; animation-delay:calc(var(--d) * 14ms); }
+  @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(.7); background:var(--ok); color:#0f1115} 100%{transform:scale(1)} }
+
+  .spacer { flex:1; min-height:4px; }
+
+  /* =========================================================
+     NÁSTROJE A ČÍSELNÍK
+     ========================================================= */
+  .tools { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .tool { background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:5px;
+    font-size:13px; font-weight:600; color:var(--muted); }
+  .tool .ic { width:54px; height:54px; border-radius:17px; background:var(--card); display:flex;
+    align-items:center; justify-content:center; font-size:22px; }
+  .tool.on { color:var(--accent); }
+  .tool.on .ic { background:var(--accent); }
+  .tool:active .ic { transform:scale(.93); }
+
+  .pad { display:grid; grid-template-columns:repeat(9,1fr); gap:6px; }
+  .num { background:var(--card); border:none; border-radius:14px; height:clamp(64px, 9dvh, 84px); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:2px; font-size:29px; font-weight:600; color:var(--accent); }
+  .num small { font-size:11px; font-weight:700; color:var(--muted); }
+  .num.done { visibility:hidden; }
+  .num:active { transform:scale(.93); }
+  .pad.notes-mode .num { color:var(--muted); }
+
+  /* =========================================================
+     PANELY (menu, výhra) A OZNÁMENÍ
+     ========================================================= */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:10; }
+  .overlay.open { display:block; }
+  .sheet { position:fixed; left:0; right:0; bottom:0; z-index:11; max-width:560px; margin:0 auto;
+    background:var(--card); border-radius:24px 24px 0 0; padding:20px 16px calc(env(safe-area-inset-bottom) + 20px);
+    transform:translateY(110%); transition:transform .25s ease; max-height:92dvh; overflow-y:auto; }
+  .sheet.open { transform:translateY(0); }
+  .sheet h3 { font-size:21px; margin-bottom:12px; }
+  .sheet h4 { font-size:15px; color:var(--muted); margin:18px 2px 8px; }
+  .btn { display:block; width:100%; height:54px; border:none; border-radius:16px; font-size:17px; font-weight:700; margin-top:8px; }
+  .btn.primary { background:var(--accent); color:#fff; }
+  .btn.ghost { background:var(--card2); }
+  .levels { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .levels .btn { margin:0; }
+  .stats { width:100%; border-collapse:collapse; font-size:15px; }
+  .stats th, .stats td { padding:10px 6px; text-align:center; border-bottom:1px solid var(--line); }
+  .stats th { color:var(--muted); font-weight:600; font-size:13px; }
+  .stats td:first-child, .stats th:first-child { text-align:left; }
+  .win-big { text-align:center; font-size:52px; margin:4px 0; }
+  .win-row { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:12px 0 4px; }
+  .win-row div { background:var(--card2); border-radius:14px; padding:12px 6px; text-align:center; }
+  .win-row b { display:block; font-size:20px; }
+  .win-row small { color:var(--muted); font-size:12px; }
+  .record { text-align:center; color:var(--ok); font-weight:800; margin-top:6px; }
+
+  .toast { position:fixed; left:50%; top:calc(env(safe-area-inset-top) + 14px); transform:translateX(-50%) translateY(-160%);
+    background:var(--accent); color:#fff; font-weight:700; padding:12px 20px; border-radius:14px; transition:transform .25s; z-index:30; white-space:nowrap; }
+  .toast.show { transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>🧩 <span>Sudoku</span></h1>
+    <button class="icon-btn" id="btnMenu" aria-label="Menu">☰</button>
+  </header>
+
+  <div class="spacer"></div>
+
+  <div class="info">
+    <span id="level">Střední</span>
+    <span>Chyby: <b id="mistakes">0</b></span>
+    <span>⏱ <b id="time">0:00</b></span>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <div class="spacer"></div>
+
+  <div class="tools">
+    <button class="tool" id="btnUndo"><span class="ic">↶</span>Zpět</button>
+    <button class="tool" id="btnErase"><span class="ic">⌫</span>Smazat</button>
+    <button class="tool" id="btnNotes"><span class="ic">✏️</span><span id="notesLbl">Poznámky</span></button>
+    <button class="tool" id="btnHint"><span class="ic">💡</span>Nápověda</button>
+  </div>
+
+  <div class="pad" id="pad"></div>
+</div>
+
+<div class="overlay" id="overlay"></div>
+
+<!-- Menu: nová hra + statistiky -->
+<div class="sheet" id="sheetMenu">
+  <h3>Nová hra</h3>
+  <div class="levels">
+    <button class="btn ghost" data-level="easy">Lehká</button>
+    <button class="btn ghost" data-level="medium">Střední</button>
+    <button class="btn ghost" data-level="hard">Těžká</button>
+  </div>
+  <h4>Statistiky</h4>
+  <table class="stats" id="statsTable"></table>
+  <button class="btn primary" data-close>Pokračovat ve hře</button>
+</div>
+
+<!-- Výhra -->
+<div class="sheet" id="sheetWin">
+  <div class="win-big">🎉</div>
+  <h3 style="text-align:center">Vyřešeno!</h3>
+  <div class="win-row" id="winStats"></div>
+  <div class="record" id="winRecord"></div>
+  <button class="btn primary" id="btnAgain">Další hra</button>
+  <button class="btn ghost" id="btnOtherLevel">Změnit obtížnost</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// =========================================================
+// 1) POMOCNÉ FUNKCE
+// =========================================================
+// Políčka číslujeme 0–80 po řádcích: index i = řádek * 9 + sloupec
+const $ = id => document.getElementById(id);
+const rowOf = i => Math.floor(i / 9);
+const colOf = i => i % 9;
+const boxOf = i => Math.floor(rowOf(i) / 3) * 3 + Math.floor(colOf(i) / 3);   // čtverec 3×3 (0–8)
+
+// "Sousedé" políčka = všechna políčka ve stejném řádku, sloupci nebo čtverci.
+// Spočítáme je jednou předem, ať to pak nemusíme počítat pořád dokola.
+const PEERS = [];
+for (let i = 0; i < 81; i++) {
+  PEERS.push([]);
+  for (let j = 0; j < 81; j++)
+    if (j !== i && (rowOf(j) === rowOf(i) || colOf(j) === colOf(i) || boxOf(j) === boxOf(i))) PEERS[i].push(j);
+}
+
+// Zamíchání pole (Fisher–Yates) – díky tomu je každé sudoku jiné
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+// Kolik bitů je v čísle nastaveno = kolik čísel je v masce
+function popcount(m) { let n = 0; while (m) { m &= m - 1; n++; } return n; }
+
+const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+// =========================================================
+// 2) ŘEŠITEL – BACKTRACKING ("zkus a vrať se")
+// =========================================================
+// Pro rychlost používáme BITOVÉ MASKY: číslo d = bit (1 << d).
+//   rows[r]  … bity čísel, která už jsou v řádku r
+//   cols[c]  … totéž pro sloupec
+//   boxes[b] … totéž pro čtverec 3×3
+// Čísla, která můžu dát do políčka = ta, co NEJSOU v jeho řádku, sloupci ani čtverci.
+const ALL = 0b1111111110;   // bity 1–9
+
+function makeState(grid) {
+  const s = { g: grid.slice(), rows: Array(9).fill(0), cols: Array(9).fill(0), boxes: Array(9).fill(0) };
+  for (let i = 0; i < 81; i++) if (s.g[i]) setDigit(s, i, s.g[i]);
+  return s;
+}
+function setDigit(s, i, d) {
+  const bit = 1 << d;
+  s.g[i] = d; s.rows[rowOf(i)] |= bit; s.cols[colOf(i)] |= bit; s.boxes[boxOf(i)] |= bit;
+}
+function clearDigit(s, i, d) {
+  const keep = ~(1 << d);
+  s.g[i] = 0; s.rows[rowOf(i)] &= keep; s.cols[colOf(i)] &= keep; s.boxes[boxOf(i)] &= keep;
+}
+function candidates(s, i) {
+  return ALL & ~(s.rows[rowOf(i)] | s.cols[colOf(i)] | s.boxes[boxOf(i)]);
+}
+
+// Vybere prázdné políčko s NEJMENŠÍM počtem možností.
+// (Když má políčko jen 1 možnost, nemusíme nic zkoušet – to řešení hodně zrychlí.)
+function bestCell(s) {
+  let best = -1, bestMask = 0, bestN = 10;
+  for (let i = 0; i < 81; i++) {
+    if (s.g[i]) continue;
+    const m = candidates(s, i), n = popcount(m);
+    if (n < bestN) { best = i; bestMask = m; bestN = n; if (n <= 1) break; }
+  }
+  return { i: best, mask: bestMask };   // i = -1 → žádné prázdné políčko
+}
+
+// Spočítá, kolik má zadání řešení (počítá jen do "limit", víc nás nezajímá).
+function countSolutions(grid, limit = 2) {
+  const s = makeState(grid);
+  let count = 0;
+  (function solve() {
+    const { i, mask } = bestCell(s);
+    if (i === -1) { count++; return; }        // vše vyplněno → našli jsme řešení
+    for (let d = 1; d <= 9 && count < limit; d++) {
+      if (!(mask & (1 << d))) continue;        // d sem nesmí
+      setDigit(s, i, d);    // 1. ZKUS číslo d
+      solve();              // 2. pokračuj dalším políčkem
+      clearDigit(s, i, d);  // 3. VRAŤ SE (backtrack) a zkus další číslo
+    }
+  })();
+  return count;
+}
+
+// Vyplní prázdnou mřížku náhodným platným řešením.
+function randomSolution() {
+  const s = makeState(Array(81).fill(0));
+  (function solve() {
+    const { i, mask } = bestCell(s);
+    if (i === -1) return true;
+    for (const d of shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9])) {   // čísla zkoušíme v náhodném pořadí
+      if (!(mask & (1 << d))) continue;
+      setDigit(s, i, d);
+      if (solve()) return true;     // povedlo se až do konce → hotovo
+      clearDigit(s, i, d);          // slepá ulička → vrátit a zkusit jiné číslo
+    }
+    return false;
+  })();
+  return s.g;
+}
+
+// =========================================================
+// 3) GENERÁTOR ZADÁNÍ
+// =========================================================
+// 1. vytvoříme celé vyřešené sudoku
+// 2. v náhodném pořadí mažeme čísla
+// 3. po každém smazání ověříme, že má sudoku pořád JEDINÉ řešení – jinak číslo vrátíme
+const LEVELS = {
+  easy:   { name: 'Lehká',   givens: 38 },   // givens = kolik čísel zůstane vyplněných
+  medium: { name: 'Střední', givens: 31 },
+  hard:   { name: 'Těžká',   givens: 25 }
+};
+
+function generate(level) {
+  const solution = randomSolution();
+  const puzzle = solution.slice();
+  let givens = 81;
+  for (const i of shuffle([...Array(81).keys()])) {
+    if (givens <= LEVELS[level].givens) break;
+    const keep = puzzle[i];
+    puzzle[i] = 0;
+    if (countSolutions(puzzle, 2) !== 1) puzzle[i] = keep;   // víc řešení → vrátit
+    else givens--;
+  }
+  return { puzzle, solution };
+}
+
+// =========================================================
+// 4) UKLÁDÁNÍ (localStorage)
+// =========================================================
+const SAVE_KEY = 'sudoku_hra_v1', STATS_KEY = 'sudoku_statistiky_v1';
+function storeGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function storeSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+let stats = storeGet(STATS_KEY) || {};
+for (const k in LEVELS) stats[k] = Object.assign({ played: 0, won: 0, best: null }, stats[k]);
+const saveStats = () => storeSet(STATS_KEY, stats);
+const saveGame = () => storeSet(SAVE_KEY, game);
+
+// =========================================================
+// 5) STAV HRY
+// =========================================================
+// game.puzzle   – zadání (0 = prázdné políčko)
+// game.solution – řešení
+// game.board    – co je teď na ploše
+// game.notes    – poznámky jako bitové masky (bit d = poznámka čísla d)
+let game = null;
+let selected = -1;      // vybrané políčko
+let noteMode = false;   // režim poznámek
+let history = [];       // pro tlačítko Zpět
+
+function newGame(level) {
+  toast('Připravuji nové sudoku…');
+  closeSheets();
+  // malá pauza, aby se stihlo ukázat oznámení, než se začne počítat
+  setTimeout(() => {
+    const { puzzle, solution } = generate(level);
+    game = { level, puzzle, solution, board: puzzle.slice(), notes: Array(81).fill(0),
+             mistakes: 0, hints: 0, seconds: 0, won: false };
+    history = []; selected = -1; noteMode = false;
+    stats[level].played++; saveStats();
+    $('board').classList.remove('won');
+    saveGame(); render();
+  }, 40);
+}
+
+// =========================================================
+// 6) TAHY
+// =========================================================
+function snapshot() {
+  history.push({ board: game.board.slice(), notes: game.notes.slice(), selected });
+  if (history.length > 150) history.shift();
+}
+
+function inputDigit(d) {
+  if (!game || game.won || selected < 0 || game.puzzle[selected]) return;
+  const i = selected;
+  if (noteMode) {
+    if (game.board[i]) return;          // poznámky jen do prázdných políček
+    snapshot();
+    game.notes[i] ^= (1 << d);          // XOR přepne bit: poznámka se zapne/vypne
+  } else {
+    if (game.board[i] === d) return;
+    snapshot();
+    game.board[i] = d;
+    game.notes[i] = 0;
+    if (d !== game.solution[i]) {
+      game.mistakes++;
+      if (navigator.vibrate) navigator.vibrate(90);
+    } else {
+      for (const p of PEERS[i]) game.notes[p] &= ~(1 << d);   // smaž poznámku d u sousedů
+    }
+    checkWin();
+  }
+  saveGame(); render();
+}
+
+function erase() {
+  if (!game || game.won || selected < 0 || game.puzzle[selected]) return;
+  if (!game.board[selected] && !game.notes[selected]) return;
+  snapshot();
+  game.board[selected] = 0; game.notes[selected] = 0;
+  saveGame(); render();
+}
+
+function undo() {
+  if (!game || game.won || !history.length) return;
+  const h = history.pop();
+  game.board = h.board; game.notes = h.notes; selected = h.selected;
+  saveGame(); render();
+}
+
+function hint() {
+  if (!game || game.won) return;
+  // nápověda do vybraného políčka; když není vhodné, vybere se náhodné prázdné/špatné
+  let i = selected;
+  if (i < 0 || game.puzzle[i] || game.board[i] === game.solution[i]) {
+    const open = [];
+    for (let j = 0; j < 81; j++) if (game.board[j] !== game.solution[j]) open.push(j);
+    if (!open.length) return;
+    i = open[Math.floor(Math.random() * open.length)];
+  }
+  snapshot();
+  const d = game.solution[i];
+  game.board[i] = d; game.notes[i] = 0; game.hints++;
+  for (const p of PEERS[i]) game.notes[p] &= ~(1 << d);
+  selected = i;
+  checkWin(); saveGame(); render();
+}
+
+function checkWin() {
+  for (let i = 0; i < 81; i++) if (game.board[i] !== game.solution[i]) return;
+  game.won = true;
+  const st = stats[game.level];
+  const record = st.best === null || game.seconds < st.best;
+  st.won++;
+  if (record) st.best = game.seconds;
+  saveStats();
+  selected = -1;
+  $('board').classList.add('won');
+  $('winStats').innerHTML = `
+    <div><b>${fmtTime(game.seconds)}</b><small>čas</small></div>
+    <div><b>${game.mistakes}</b><small>chyb</small></div>
+    <div><b>${game.hints}</b><small>nápověd</small></div>`;
+  $('winRecord').textContent = record ? `🏆 Nový rekord – ${LEVELS[game.level].name.toLowerCase()} obtížnost!` : '';
+  setTimeout(() => openSheet('sheetWin'), 1400);
+}
+
+// =========================================================
+// 7) VYKRESLENÍ
+// =========================================================
+const cells = [];
+function buildBoard() {
+  const board = $('board');
+  for (let i = 0; i < 81; i++) {
+    const el = document.createElement('div');
+    el.dataset.i = i;
+    el.style.setProperty('--d', rowOf(i) + colOf(i));   // zpoždění animace po vyřešení
+    el.addEventListener('pointerdown', () => { selected = i; render(); });
+    board.appendChild(el);
+    cells.push(el);
+  }
+  const pad = $('pad');
+  for (let d = 1; d <= 9; d++) {
+    const b = document.createElement('button');
+    b.className = 'num';
+    b.addEventListener('click', () => inputDigit(d));
+    pad.appendChild(b);
+  }
+}
+
+function render() {
+  if (!game) return;
+  const selVal = selected >= 0 ? game.board[selected] : 0;
+  const peers = selected >= 0 ? PEERS[selected] : [];
+
+  for (let i = 0; i < 81; i++) {
+    const v = game.board[i];
+    const cls = ['cell'];
+    const r = rowOf(i), c = colOf(i);
+    if (c === 2 || c === 5) cls.push('br');
+    if (r === 2 || r === 5) cls.push('bb');
+    if (c === 8) cls.push('c8');
+    if (r === 8) cls.push('r8');
+    if (game.puzzle[i]) cls.push('given');
+    if (v && v !== game.solution[i]) cls.push('wrong');
+    if (i === selected) cls.push('sel');
+    else if (selVal && v === selVal) cls.push('same');
+    else if (peers.includes(i)) cls.push('peer');
+    cells[i].className = cls.join(' ');
+
+    if (v) cells[i].textContent = v;
+    else if (game.notes[i]) {
+      let h = '<div class="notes">';
+      for (let d = 1; d <= 9; d++) {
+        const has = game.notes[i] & (1 << d);
+        h += `<span class="${has && d === selVal ? 'hl' : ''}">${has ? d : ''}</span>`;
+      }
+      cells[i].innerHTML = h + '</div>';
+    } else cells[i].textContent = '';
+  }
+
+  // číselník: kolik kterého čísla ještě zbývá doplnit
+  const btns = $('pad').children;
+  for (let d = 1; d <= 9; d++) {
+    let placed = 0;
+    for (let i = 0; i < 81; i++) if (game.board[i] === d && game.solution[i] === d) placed++;
+    btns[d - 1].innerHTML = `${d}<small>${9 - placed}</small>`;
+    btns[d - 1].classList.toggle('done', placed === 9);
+  }
+  $('pad').classList.toggle('notes-mode', noteMode);
+
+  $('btnNotes').classList.toggle('on', noteMode);
+  $('notesLbl').textContent = noteMode ? 'Poznámky ZAP' : 'Poznámky';
+  $('level').textContent = LEVELS[game.level].name;
+  $('mistakes').textContent = game.mistakes;
+  $('time').textContent = fmtTime(game.seconds);
+}
+
+function renderStats() {
+  let h = '<tr><th>Obtížnost</th><th>Hry</th><th>Výhry</th><th>Rekord</th></tr>';
+  for (const k in LEVELS) {
+    const s = stats[k];
+    h += `<tr><td>${LEVELS[k].name}</td><td>${s.played}</td><td>${s.won}</td><td>${s.best === null ? '–' : fmtTime(s.best)}</td></tr>`;
+  }
+  $('statsTable').innerHTML = h;
+}
+
+// =========================================================
+// 8) OVLÁDÁNÍ
+// =========================================================
+$('btnUndo').addEventListener('click', undo);
+$('btnErase').addEventListener('click', erase);
+$('btnHint').addEventListener('click', hint);
+$('btnNotes').addEventListener('click', () => { noteMode = !noteMode; render(); });
+$('btnMenu').addEventListener('click', () => { renderStats(); openSheet('sheetMenu'); });
+
+document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
+  const inProgress = game && !game.won && game.board.some((v, i) => v && !game.puzzle[i]);
+  if (inProgress && !confirm('Rozehranou hru ztratíš. Začít novou?')) return;
+  newGame(b.dataset.level);
+}));
+$('btnAgain').addEventListener('click', () => newGame(game.level));
+$('btnOtherLevel').addEventListener('click', () => { renderStats(); openSheet('sheetMenu'); });
+
+// klávesnice (na počítači): čísla, šipky, Backspace, N = poznámky, Ctrl+Z = zpět
+document.addEventListener('keydown', e => {
+  if (e.key >= '1' && e.key <= '9') inputDigit(Number(e.key));
+  else if (['Backspace', 'Delete', '0'].includes(e.key)) erase();
+  else if (e.key.toLowerCase() === 'n') { noteMode = !noteMode; render(); }
+  else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) undo();
+  else if (e.key.startsWith('Arrow')) {
+    if (selected < 0) selected = 40;
+    else {
+      let r = rowOf(selected), c = colOf(selected);
+      if (e.key === 'ArrowUp') r = (r + 8) % 9;
+      if (e.key === 'ArrowDown') r = (r + 1) % 9;
+      if (e.key === 'ArrowLeft') c = (c + 8) % 9;
+      if (e.key === 'ArrowRight') c = (c + 1) % 9;
+      selected = r * 9 + c;
+    }
+    e.preventDefault(); render();
+  }
+});
+
+// panely
+function openSheet(id) {
+  document.querySelectorAll('.sheet').forEach(s => s.classList.remove('open'));
+  $('overlay').classList.add('open'); $(id).classList.add('open');
+}
+function closeSheets() {
+  $('overlay').classList.remove('open');
+  document.querySelectorAll('.sheet').forEach(s => s.classList.remove('open'));
+}
+const sheetOpen = () => $('overlay').classList.contains('open');
+$('overlay').addEventListener('click', () => { if (!$('sheetWin').classList.contains('open')) closeSheets(); });
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
+
+let toastTimer;
+function toast(msg) {
+  $('toast').textContent = msg; $('toast').classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 1800);
+}
+
+// =========================================================
+// 9) ČASOMÍRA – běží jen když hraješ (ne v menu ani na pozadí)
+// =========================================================
+setInterval(() => {
+  if (!game || game.won || document.hidden || sheetOpen()) return;
+  game.seconds++;
+  $('time').textContent = fmtTime(game.seconds);
+  if (game.seconds % 5 === 0) saveGame();
+}, 1000);
+document.addEventListener('visibilitychange', () => { if (document.hidden && game) saveGame(); });
+
+// =========================================================
+// 10) START – pokračuj v uložené hře, nebo začni novou
+// =========================================================
+buildBoard();
+const saved = storeGet(SAVE_KEY);
+if (saved && !saved.won && LEVELS[saved.level] && [saved.puzzle, saved.solution, saved.board, saved.notes].every(a => Array.isArray(a) && a.length === 81)) {
+  game = saved; render();
+} else {
+  newGame(saved && LEVELS[saved.level] ? saved.level : 'medium');
+}
+
+// PWA: offline režim
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
