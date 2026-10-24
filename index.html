@@ -131,6 +131,45 @@
   .toast { position:fixed; left:50%; top:calc(env(safe-area-inset-top) + 14px); transform:translateX(-50%) translateY(-160%);
     background:var(--accent); color:#fff; font-weight:700; padding:12px 20px; border-radius:14px; transition:transform .25s; z-index:30; white-space:nowrap; }
   .toast.show { transform:translateX(-50%) translateY(0); }
+
+  /* =========================================================
+     VELIKOST ČÍSEL PODLE DESKY (ne podle šířky obrazovky)
+     cqw = 1 % šířky desky → čísla se vždy vejdou do políčka
+     ========================================================= */
+  .board { container-type:inline-size; grid-template-rows:repeat(9,minmax(0,1fr)); }
+  .cell { font-size:clamp(14px, 6.4cqw, 48px); }
+  .notes span { font-size:clamp(8px, 2.5cqw, 16px); }
+
+  /* na výšku: obal .side se "rozpustí", rozložení zůstává jako dřív */
+  .side { display:contents; }
+
+  /* =========================================================
+     NA ŠÍŘKU (tablet / mobil naplocho):
+     deska vlevo, nástroje a čísla 3×3 vpravo
+     ========================================================= */
+  @media (orientation: landscape) {
+    .app {
+      /* velikost desky = výška displeje minus hlavička a řádek s časem,
+         ale nejvýš tolik, aby vpravo zbylo místo na čísla */
+      --bs: min(calc(100dvh - 120px - env(safe-area-inset-top) - env(safe-area-inset-bottom)),
+                calc(100vw - 300px));
+      max-width:none; width:fit-content;
+      display:grid; column-gap:24px; row-gap:10px;
+      grid-template-columns: var(--bs) minmax(240px, 380px);
+      grid-template-rows: auto auto auto;
+      grid-template-areas: "head head" "info side" "board side";
+      align-content:center;
+      padding-left:calc(env(safe-area-inset-left) + 12px);
+      padding-right:calc(env(safe-area-inset-right) + 12px);
+    }
+    header { grid-area:head; }
+    .info  { grid-area:info; }
+    .board { grid-area:board; width:var(--bs); }
+    .spacer { display:none; }
+    .side { grid-area:side; display:flex; flex-direction:column; justify-content:center; gap:16px; }
+    .pad { grid-template-columns:repeat(3,1fr); gap:8px; }
+    .num { height:clamp(44px, calc((var(--bs) - 140px) / 3), 96px); font-size:clamp(22px, 5dvh, 36px); }
+  }
 </style>
 </head>
 <body>
@@ -152,14 +191,16 @@
 
   <div class="spacer"></div>
 
-  <div class="tools">
-    <button class="tool" id="btnUndo"><span class="ic">↶</span>Zpět</button>
-    <button class="tool" id="btnErase"><span class="ic">⌫</span>Smazat</button>
-    <button class="tool" id="btnNotes"><span class="ic">✏️</span><span id="notesLbl">Poznámky</span></button>
-    <button class="tool" id="btnHint"><span class="ic">💡</span>Nápověda</button>
-  </div>
+  <div class="side">
+    <div class="tools">
+      <button class="tool" id="btnUndo"><span class="ic">↶</span>Zpět</button>
+      <button class="tool" id="btnErase"><span class="ic">⌫</span>Smazat</button>
+      <button class="tool" id="btnNotes"><span class="ic">✏️</span><span id="notesLbl">Poznámky</span></button>
+      <button class="tool" id="btnHint"><span class="ic">💡</span>Nápověda</button>
+    </div>
 
-  <div class="pad" id="pad"></div>
+    <div class="pad" id="pad"></div>
+  </div>
 </div>
 
 <div class="overlay" id="overlay"></div>
